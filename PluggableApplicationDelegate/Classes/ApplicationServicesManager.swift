@@ -26,7 +26,7 @@ extension ApplicationService {
 open class PluggableApplicationDelegate: UIResponder, UIApplicationDelegate {
     
     public var window: UIWindow?
-    
+  
     open var services: [ApplicationService] { return [] }
     private lazy var __services: [ApplicationService] = {
         return self.services
@@ -197,25 +197,44 @@ open class PluggableApplicationDelegate: UIResponder, UIApplicationDelegate {
         }
     }
     
+    private func waitServicesCompletion<T, R>(_ serviceCall: (_ service: UIApplicationDelegate, _ completion:  @escaping (T) -> Swift.Void) -> R?, callbackAggregation: (([T]) -> T)? = nil, completion: @escaping (T) -> Swift.Void, resultAggregation: (([R]) -> R)? = nil) -> R? {
+        let group = DispatchGroup()
+        var completionResults = [T]()
+        var results = [R]()
+        for service in __services {
+            group.enter()
+            if let result = serviceCall(service, { result in
+                completionResults.append(result)
+                group.leave()
+            }) {
+                results.append(result)
+            }
+            
+        }
+        group.notify(queue: DispatchQueue.main) {
+            if let completionResult = callbackAggregation?(completionResults) ?? completionResults.first {
+                completion(completionResult)
+            }
+        }
+        return resultAggregation?(results) ?? results.first
+    }
     
     // Called when your app has been activated by the user selecting an action from a local notification.
     // A nil action identifier indicates the default action.
     // You should call the completion handler as soon as you've finished handling the action.
     @available(iOS, introduced: 8.0, deprecated: 10.0, message: "Use UserNotifications Framework's -[UNUserNotificationCenterDelegate didReceiveNotificationResponse:withCompletionHandler:]")
     open func application(_ application: UIApplication, handleActionWithIdentifier identifier: String?, for notification: UILocalNotification, completionHandler: @escaping () -> Swift.Void) {
-        
-        for service in __services {
-            service.application?(application, handleActionWithIdentifier: identifier, for: notification, completionHandler: completionHandler)
-        }
-        
+        waitServicesCompletion(
+            { $0.application?(application, handleActionWithIdentifier: identifier, for: notification, completionHandler: $1)},
+            completion: completionHandler)
     }
     
     
     @available(iOS, introduced: 9.0, deprecated: 10.0, message: "Use UserNotifications Framework's -[UNUserNotificationCenterDelegate didReceiveNotificationResponse:withCompletionHandler:]")
     open func application(_ application: UIApplication, handleActionWithIdentifier identifier: String?, forRemoteNotification userInfo: [AnyHashable : Any], withResponseInfo responseInfo: [AnyHashable : Any], completionHandler: @escaping () -> Swift.Void) {
-        for service in __services {
-            service.application?(application, handleActionWithIdentifier: identifier, forRemoteNotification: userInfo, withResponseInfo: responseInfo, completionHandler: completionHandler)
-        }
+        waitServicesCompletion(
+            { $0.application?(application, handleActionWithIdentifier: identifier, forRemoteNotification: userInfo, withResponseInfo: responseInfo, completionHandler: $1) },
+            completion: completionHandler)
     }
     
     
@@ -224,17 +243,17 @@ open class PluggableApplicationDelegate: UIResponder, UIApplicationDelegate {
     // You should call the completion handler as soon as you've finished handling the action.
     @available(iOS, introduced: 8.0, deprecated: 10.0, message: "Use UserNotifications Framework's -[UNUserNotificationCenterDelegate didReceiveNotificationResponse:withCompletionHandler:]")
     open func application(_ application: UIApplication, handleActionWithIdentifier identifier: String?, forRemoteNotification userInfo: [AnyHashable : Any], completionHandler: @escaping () -> Swift.Void) {
-        for service in __services {
-            service.application?(application, handleActionWithIdentifier: identifier, forRemoteNotification: userInfo, completionHandler: completionHandler)
-        }
+        waitServicesCompletion(
+            { $0.application?(application, handleActionWithIdentifier: identifier, forRemoteNotification: userInfo, completionHandler: $1)},
+            completion: completionHandler)
     }
     
     
     @available(iOS, introduced: 9.0, deprecated: 10.0, message: "Use UserNotifications Framework's -[UNUserNotificationCenterDelegate didReceiveNotificationResponse:withCompletionHandler:]")
     open func application(_ application: UIApplication, handleActionWithIdentifier identifier: String?, for notification: UILocalNotification, withResponseInfo responseInfo: [AnyHashable : Any], completionHandler: @escaping () -> Swift.Void) {
-        for service in __services {
-            service.application?(application, handleActionWithIdentifier: identifier, for: notification, withResponseInfo: responseInfo, completionHandler: completionHandler)
-        }
+        waitServicesCompletion(
+            { $0.application?(application, handleActionWithIdentifier: identifier, for: notification, withResponseInfo: responseInfo, completionHandler: $1) },
+            completion: completionHandler)
     }
     
     
@@ -243,9 +262,18 @@ open class PluggableApplicationDelegate: UIResponder, UIApplicationDelegate {
      This method will be invoked even if the application was launched or resumed because of the remote notification. The respective delegate methods will be invoked first. Note that this behavior is in contrast to application:didReceiveRemoteNotification:, which is not called in those cases, and which will not be invoked if this method is implemented. !*/
     @available(iOS 7.0, *)
     open func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable : Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Swift.Void) {
-        for service in __services {
-            service.application?(application, didReceiveRemoteNotification: userInfo, fetchCompletionHandler: completionHandler)
-        }
+        waitServicesCompletion(
+            { $0.application?(application, didReceiveRemoteNotification: userInfo, fetchCompletionHandler: $1)},
+            callbackAggregation: { results -> UIBackgroundFetchResult in
+                if results.contains(.failed) {
+                    return .failed
+                }
+                if results.contains(.noData) {
+                    return .noData
+                }
+                return .newData
+        },
+            completion: completionHandler)
     }
     
     
@@ -255,6 +283,18 @@ open class PluggableApplicationDelegate: UIResponder, UIApplicationDelegate {
         for service in __services {
             service.application?(application, performFetchWithCompletionHandler: completionHandler)
         }
+        waitServicesCompletion(
+            {$0.application?(application, performFetchWithCompletionHandler: $1)},
+            callbackAggregation: { results -> UIBackgroundFetchResult in
+                if results.contains(.failed) {
+                    return .failed
+                }
+                if results.contains(.noData) {
+                    return .noData
+                }
+                return .newData
+        },
+            completion: completionHandler)
     }
     
     
@@ -262,9 +302,9 @@ open class PluggableApplicationDelegate: UIResponder, UIApplicationDelegate {
     // except when -application:willFinishLaunchingWithOptions: or -application:didFinishLaunchingWithOptions returns NO.
     @available(iOS 9.0, *)
     open func application(_ application: UIApplication, performActionFor shortcutItem: UIApplicationShortcutItem, completionHandler: @escaping (Bool) -> Swift.Void) {
-        for service in __services {
-            service.application?(application, performActionFor: shortcutItem, completionHandler: completionHandler)
-        }
+        waitServicesCompletion(
+            { $0.application?(application, performActionFor: shortcutItem, completionHandler: $1)},
+            completion: completionHandler)
     }
     
     
@@ -275,17 +315,23 @@ open class PluggableApplicationDelegate: UIResponder, UIApplicationDelegate {
     // callbacks without any action by the application. You should call the completionHandler as soon as you're finished handling the callbacks.
     @available(iOS 7.0, *)
     open func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Swift.Void) {
-        for service in __services {
-            service.application?(application, handleEventsForBackgroundURLSession: identifier, completionHandler: completionHandler)
-        }
+        waitServicesCompletion(
+            { $0.application?(application, handleEventsForBackgroundURLSession: identifier, completionHandler: $1)},
+            completion: completionHandler)
     }
     
     
     @available(iOS 8.2, *)
     open func application(_ application: UIApplication, handleWatchKitExtensionRequest userInfo: [AnyHashable : Any]?, reply: @escaping ([AnyHashable : Any]?) -> Swift.Void) {
-        for service in __services {
-            service.application?(application, handleWatchKitExtensionRequest: userInfo, reply: reply)
-        }
+        waitServicesCompletion({ $0.application?(application, handleWatchKitExtensionRequest: userInfo, reply: $1)}, callbackAggregation: { results -> [AnyHashable : Any]? in
+            let totals = results.flatMap({ $0 })
+            if totals.isEmpty {
+                return nil
+            }
+            return totals.reduce([:], { (total, current) -> [AnyHashable : Any]? in
+                return total?.merging(current, uniquingKeysWith: { $0 })
+            })
+        }, completion: reply)
     }
     
     
@@ -349,7 +395,6 @@ open class PluggableApplicationDelegate: UIResponder, UIApplicationDelegate {
                 return viewController
             }
         }
-        
         return nil
     }
     
@@ -412,13 +457,11 @@ open class PluggableApplicationDelegate: UIResponder, UIApplicationDelegate {
     // restoreUserActivityState on all objects.
     @available(iOS 8.0, *)
     open func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([Any]?) -> Swift.Void) -> Bool {
-        var result = true
-        for service in __services {
-            if service.application?(application, continue: userActivity, restorationHandler: restorationHandler) == false {
-                result = false
-            }
-        }
-        return result
+        return waitServicesCompletion({ $0.application?(application, continue: userActivity, restorationHandler: $1)}, callbackAggregation: { results -> [Any]? in
+            return results.flatMap({ $0 })
+        }, completion: restorationHandler, resultAggregation: { results -> Bool in
+            return results.reduce(true, { $0 && $1 })
+        }) ?? true
     }
     
     
